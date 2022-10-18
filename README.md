@@ -1,3 +1,15 @@
+**Fork of https://github.com/CompVis/stable-diffusion, all credit goes to them**
+The only difference is adapting the code for https://medium.com/@enryu9000/TODO.
+
+You can get checkpoint [here](https://huggingface.co/enryu43/anifusion_unet/tree/main). You need `original_ckpt.bin`, unless you want to use the model via Diffusers.
+
+Some examples:
+
+```commandline
+python txt2img.py --ckpt <PATH-TO-CHECKPOINT> --seed=9831744  --plms --n_samples=1 --ddim_steps=100 --scale=8.0 --prompt="1girl,smile,rating_s"
+python img2img.py --ckpt <PATH-TO-CHECKPOINT> --n_samples=1 --scale=8.0 --prompt "1girl,solo,smile,rating_s" --init-img assets/stable-samples/img2img/sketch-mountains-input.jpg --strength 0.6
+```
+
 # Stable Diffusion
 *Stable Diffusion was made possible thanks to a collaboration with [Stability AI](https://stability.ai/) and [Runway](https://runwayml.com/) and builds upon our previous work:*
 

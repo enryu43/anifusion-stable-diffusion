@@ -5,6 +5,7 @@ import clip
 from einops import rearrange, repeat
 from transformers import CLIPTokenizer, CLIPTextModel
 import kornia
+import numpy as np
 
 from ldm.modules.x_transformer import Encoder, TransformerWrapper  # TODO: can we directly rely on lucidrains code and simply add this as a reuirement? --> test
 
@@ -226,6 +227,149 @@ class FrozenClipImageEmbedder(nn.Module):
     def forward(self, x):
         # x is assumed to be in range [-1,1]
         return self.model.encode_image(self.preprocess(x))
+
+
+import numpy as np
+import transformers
+import hashlib
+import zlib
+from base64 import urlsafe_b64decode as b64d
+import six
+
+class TagTokenizer(object):
+    def __init__(self, ar_model_path, max_length, device='cuda'):
+        self.device = device
+        self.max_length = max_length
+
+        # TODO: this is hacky, can we do smth nicer? OmegaConf doesn't seem to allow specifying relative paths.
+        import os
+        our_dir = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(our_dir, 'tags.config'), 'rb') as f:
+          raw_tags = f.read()
+        id2tag = zlib.decompress(b64d(raw_tags))
+        id2tag = six.ensure_str(id2tag).split(',')
+        tag2id = {t: i for i, t in enumerate(id2tag)}
+        id2tag = {i: t for t, i in tag2id.items()}
+        
+        self.vocab_size = len(id2tag)
+        self.tag2id = tag2id
+        self.id2tag = id2tag
+        self.cache = {}
+        self.bos = 2999
+        self.eos = 2999
+        self.pad = 2999
+        self.pad_token_id = self.pad
+
+        vocab_size = len(id2tag)
+        self.BOS = vocab_size
+        self.EOS = vocab_size + 1
+        self.PAD = vocab_size + 2
+       
+        self.model = transformers.AutoModelForCausalLM.from_pretrained(ar_model_path).to(self.device)
+        
+        BLACKLIST = 'censored,mosaic_censoring,photoshop_(medium),comic,monochrome,translated,greyscale,jpeg_artifacts,hard_translated,bar_censor,lowres,bad_pixiv_id,bad_id,translation_request,transparent_background,realistic,photo_(medium)'.split(',')
+        META = 'rating_e,rating_s,rating_q,score_perc_10,score_perc_20,score_perc_40,score_perc_60,score_perc_80,score_perc_90,score_perc_100,adjusted_score_perc_10,adjusted_score_perc_20,adjusted_score_perc_40,adjusted_score_perc_60,adjusted_score_perc_80,adjusted_score_perc_90,adjusted_score_perc_100'.split(',')
+        self.BLACKLIST = [[tag2id[t]] for t in BLACKLIST]
+        self.META = [tag2id[t] for t in META]
+
+
+    def token_id(self, token):
+        if token in self.tag2id:
+          return self.tag2id[token]
+        h = self.pad + 1 + (int(hashlib.sha1(token.encode('utf-8')).hexdigest(), 16) % (10 ** 9))
+        self.cache[h] = token
+        return h
+
+    def token(self, token_id):
+        if token_id in self.id2tag:
+          return self.id2tag[token_id]
+        assert token_id in self.cache
+        return self.cache[token_id]
+
+    def generate(self, prompt, max_augment=50, seed=None):
+      result = []
+      ids = [self.BOS]
+      index_mapping = []
+      for t in prompt:
+         result.append(self.token_id(t))
+         if t in self.tag2id:
+           ids.append(self.tag2id[t])
+           index_mapping.append(len(result) - 1)
+      if seed is not None:
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+      gens = self.model.generate(
+          input_ids=torch.tensor(np.array([ids], dtype=np.int32)).to(self.device),
+          temperature=1.0,  # HERE
+          top_p=0.9,
+          do_sample=True,
+          min_length=max_augment + 2, max_length=max_augment + 2,
+          pad_token_id=self.PAD, eos_token=self.EOS, bos_token_id=self.BOS,
+          no_repeat_ngram_size=1,
+          bad_words_ids=self.BLACKLIST + [[x] for x in self.META]).cpu().numpy()[0, 1:-1]
+      assert len(gens) >= len(index_mapping)
+      for i in range(len(index_mapping)):
+          assert result[index_mapping[i]] == gens[i]
+      for i in range(len(index_mapping), len(gens)):
+          result.append(gens[i])
+
+      return [self.token(x) for x in result]
+
+
+    def encode_one(self, text, max_length=50, add_special_tokens=True, augment=True, max_augment=50, seed=None, **kwargs):
+        text = text.replace(',', ' ').split(' ')
+        text = [s for s in text if s]
+        if '__NO_AUGMENT__' in text:
+          augment = False
+          text = [s for s in text if s != '__NO_AUGMENT__']
+        print('Called for:', text)
+        if len(text) > 0 and augment:
+          text = self.generate(text, max_augment=max_augment, seed=seed)
+          print('Generated:', text)
+        text = [self.token_id(s) for s in text]
+        text = text[:max_length]
+        if add_special_tokens:
+          text.extend([self.pad] * (max_length - len(text)))
+        return np.array(text)
+
+    def __call__(self, text, max_length=50, add_special_tokens=True, augment=True, max_augment=50, **kwargs):
+        print('Final call with:', augment, max_augment)
+        if isinstance(text, list):
+            res = np.array([self.encode_one(s, add_special_tokens=add_special_tokens, augment=augment, max_augment=max_augment, **kwargs) for s in text])
+        else:
+          res = self.encode_one(text, add_special_tokens=add_special_tokens, augment=augment, max_augment=max_augment, **kwargs)
+        res = torch.tensor(res)
+        return {'input_ids': res}
+
+
+
+class WrappedTransformerEmbedder(TransformerEmbedder):
+    def __init__(self, device='cuda', max_seq_len=77, ar_model_path='', **kwargs):
+        super().__init__(device=device, max_seq_len=max_seq_len, **kwargs)
+        self.tokenizer = TagTokenizer(ar_model_path, max_seq_len, device=device)
+        self.device = device
+        self.max_length = max_seq_len
+        self.freeze()
+
+    def freeze(self):
+        self.transformer = self.transformer.eval()
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward(self, text, augment=True, **kwargs):
+        batch_encoding = self.tokenizer(text, max_length=self.max_length, augment=augment, **kwargs)
+        if isinstance(batch_encoding, dict):
+            batch_encoding = batch_encoding['input_ids']
+        tokens = torch.clamp(batch_encoding, 0, self.tokenizer.pad)
+        tokens = batch_encoding.to(self.device)
+        z = super().forward(tokens)
+        return z
+
+    def encode(self, text):
+        return self(text)
+
+
+
 
 
 if __name__ == "__main__":

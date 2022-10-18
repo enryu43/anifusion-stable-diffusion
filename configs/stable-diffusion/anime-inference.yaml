@@ -1,0 +1,67 @@
+model:
+  base_learning_rate: 1.0e-04
+  target: ldm.models.diffusion.ddpm.LatentDiffusion
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0195
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key: "jpg"
+    cond_stage_key: "txt"
+    image_size: 64
+    channels: 3
+    cond_stage_trainable: false   # Note: different from the one we trained before
+    conditioning_key: crossattn
+    monitor: val/loss_simple_ema
+    use_ema: False
+
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 64 # unused
+        in_channels: 3
+        out_channels: 3
+        model_channels: 224
+        attention_resolutions: [ 8, 4, 2 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 3, 4 ]
+        num_heads: 8
+        num_head_channels: 32
+        use_spatial_transformer: True
+        transformer_depth: 1
+        context_dim: 768
+        use_checkpoint: True
+        legacy: False
+
+    first_stage_config:
+      target: ldm.models.autoencoder.VQModel
+      params:
+        embed_dim: 3
+        n_embed: 8192
+        ddconfig:
+          double_z: False
+          z_channels: 3
+          resolution: 512
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 1
+          - 2
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+
+    cond_stage_config:
+      target: ldm.modules.encoders.modules.WrappedTransformerEmbedder
+      params:
+        ar_model_path: 'enryu43/anifusion_augmenter'
+        n_embed: 768
+        n_layer: 12
+        vocab_size: 3000
+        max_seq_len: 50

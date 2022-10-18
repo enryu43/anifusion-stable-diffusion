@@ -85,6 +85,7 @@ def load_replacement(x):
 
 
 def check_safety(x_image):
+    # Not available for anime.
     return x_image, False
 
 
