@@ -1,5 +1,5 @@
 **Fork of https://github.com/CompVis/stable-diffusion, all credit goes to them**
-The only difference is adapting the code for https://medium.com/@enryu9000/TODO.
+The only difference is adapting the code for https://medium.com/@enryu9000/anifusion-diffusion-models-for-anime-pictures-138cf1af2cbe.
 
 You can get checkpoint [here](https://huggingface.co/enryu43/anifusion_unet/tree/main). You need `original_ckpt.bin`, unless you want to use the model via Diffusers.
 
